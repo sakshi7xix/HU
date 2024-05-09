@@ -1,0 +1,203 @@
+python -m venv env
+.\env\Scripts\activate  # Windows activation
+ 
+pip install fastapi uvicorn sqlalchemy psycopg2 alembic
+ 
+fastapi-app/
+│
+├── alembic/                 # Alembic migration scripts
+│   └── versions/            # Versioned migration files
+│
+├── app/                     # Main application module
+│   ├── __init__.py          # Initializes Python package
+│   ├── main.py              # FastAPI app creation and routes
+│   ├── models.py            # SQLAlchemy models
+│   ├── schemas.py           # Pydantic schemas for request and response validation
+│   ├── database.py          # Database session and engine
+│   └── crud.py              # CRUD operations (create, read, update, delete)
+│
+├── alembic.ini              # Configuration for Alembic
+└── requirements.txt         # Python dependencies
+ 
+ 
+ 
+Generate Alembic configuration
+alembic init alembic
+ 
+Edit alembic.ini to set the SQLALCHEMY_DATABASE_URI:
+sqlalchemy.url = postgresql://username:password@localhost/fastapidb
+ 
+Modify env.py in Alembic to import Base from your models:
+from app.models import Base  # ensure the path is correct
+target_metadata = Base.metadata
+ 
+ 
+ 
+models.py
+from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+ 
+Base = declarative_base()
+ 
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+ 
+class Session(Base):
+    __tablename__ = "sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+ 
+ 
+ 
+database.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from .models import Base
+ 
+SQLALCHEMY_DATABASE_URL = "postgresql://username:password@localhost/fastapidb"
+ 
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+ 
+def init_db():
+    Base.metadata.create_all(bind=engine)
+ 
+ 
+ 
+crud.py
+from sqlalchemy.orm import Session
+from .models import User, Session as UserSession
+ 
+# CRUD operations for User
+def create_user(db: Session, username: str):
+    db_user = User(username=username)
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user.id
+ 
+def get_user_by_username(db: Session, username: str):
+    return db.query(User).filter(User.username == username).first()
+ 
+# CRUD operations for Session
+def create_session(db: Session, user_id: int):
+    db_session = UserSession(user_id=user_id)
+    db.add(db_session)
+    db.commit()
+    db.refresh(db_session)
+    return db_session.id
+ 
+def get_sessions_for_user(db: Session, user_id: int):
+    return db.query(UserSession).filter(UserSession.user_id == user_id).all()
+ 
+def get_session_history(db: Session, user_id: int, session_id: int):
+    # Simulated function, implement according to your data model
+    return [{"session_id": session_id, "user_id": user_id, "history": "Sample history"}]
+ 
+ 
+ 
+main.py
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from sqlalchemy.orm import Session
+from typing import List
+from . import crud, models, schemas, database
+ 
+app = FastAPI()
+ 
+# Dependency
+def get_db():
+    db = database.SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+ 
+@app.post("/create-user/", response_model=schemas.UserIdResponse)
+def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    db_user = crud.get_user_by_username(db, username=user.username)
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    user_id = crud.create_user(db=db, username=user.username)
+    return {"user_id": user_id}
+ 
+@app.post("/create-session/", response_model=schemas.SessionIdResponse)
+def create_session(user_id: int, db: Session = Depends(get_db)):
+    session_id = crud.create_session(db=db, user_id=user_id)
+    return {"session_id": session_id}
+ 
+@app.post("/upload/", response_model=schemas.UploadResponse)
+async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    content = await file.read()
+    # Here you would save and index the file content
+    return {"filename": file.filename, "message": "File uploaded and indexed successfully"}
+ 
+@app.post("/post-query/", response_model=schemas.QueryResponse)
+def post_query(query: schemas.QueryRequest, db: Session = Depends(get_db)):
+    # Here you would process the query using LLM or other means
+    answer = "This is a simulated answer."
+    return {"query": query.query, "answer": answer}
+ 
+@app.get("/fetch-sessions/", response_model=List[schemas.Session])
+def fetch_sessions(user_id: int, db: Session = Depends(get_db)):
+    sessions = crud.get_sessions_for_user(db, user_id=user_id)
+    return sessions
+ 
+@app.get("/get-session-history/", response_model=List[schemas.SessionHistory])
+def get_session_history(user_id: int, session_id: int, db: Session = Depends(get_db)):
+    history = crud.get_session_history(db, user_id=user_id, session_id=session_id)
+    return history
+ 
+ 
+ 
+schemas.py
+from pydantic import BaseModel
+from typing import List, Optional
+ 
+# Schemas for user operations
+class UserBase(BaseModel):
+    username: str
+ 
+class UserCreate(UserBase):
+    pass
+ 
+class UserIdResponse(BaseModel):
+    user_id: int
+ 
+# Schemas for session operations
+class SessionIdResponse(BaseModel):
+    session_id: int
+ 
+class Session(BaseModel):
+    id: int
+    user_id: int
+ 
+    class Config:
+        orm_mode = True
+ 
+class SessionHistory(BaseModel):
+    session_id: int
+    user_id: int
+    history: str
+ 
+# Schema for uploading documents
+class UploadResponse(BaseModel):
+    filename: str
+    message: str
+ 
+# Schema for querying
+class QueryRequest(BaseModel):
+    query: str
+    context: Optional[str] = None
+ 
+class QueryResponse(BaseModel):
+    query: str
+    answer: str
+ 
+ 
+ 
+ 
+ 
+uvicorn app.main:app --reload
